@@ -496,7 +496,6 @@ def build_data(records, monthly):
 
     counts = defaultdict(lambda: defaultdict(int))
     raw_days = defaultdict(list)
-    check_status_counts = defaultdict(lambda: defaultdict(int))  # check_date -> status -> count
     complete_status_counts = defaultdict(lambda: defaultdict(int))  # complete_date -> status -> count
     entry_counts = defaultdict(int)
     entry_date_days = defaultdict(lambda: defaultdict(list))   # entry_type -> date -> [days]
@@ -506,10 +505,6 @@ def build_data(records, monthly):
     for r in records:
         counts[r["visa"]][r["date"]] += 1
         raw_days[r["visa"]].append(r["days"])
-        # Include all valid check dates regardless of how old they are
-        cd = r["check_date"]
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", cd):
-            check_status_counts[cd][r["status"]] += 1
         # Complete date distribution
         if re.match(r"^\d{4}-\d{2}-\d{2}$", r["date"]):
             complete_status_counts[r["date"]][r["status"]] += 1
@@ -520,7 +515,7 @@ def build_data(records, monthly):
             consulate_counts[r["consulate"]] += 1
             consulate_days[r["consulate"]].append(r["days"])
 
-    groups_visas = [["B1", "B2"], ["F1", "F2"], ["H1", "H4"], ["J1", "J2"], ["L1", "L2"], ["O1"]]
+    groups_visas = [["B1", "B2"], ["F1", "F2"], ["H1", "H4"], ["J1", "J2"], ["L1", "L2"], ["O1", "O2"]]
     stats = {}
     for visas in groups_visas:
         all_days = [d for v in visas for d in raw_days[v]]
@@ -542,19 +537,10 @@ def build_data(records, monthly):
             "avg_days": round(sum(all_days) / len(all_days), 1) if all_days else 0,
         }
 
-    # Check date distribution: sorted statuses for consistent coloring
+    # Complete date distribution: sorted statuses for consistent coloring
     all_statuses = sorted(set(
-        s for day_s in check_status_counts.values() for s in day_s
+        s for day_s in complete_status_counts.values() for s in day_s
     ))
-    check_dates = sorted(check_status_counts.keys())
-    check_dist = {
-        "dates": check_dates,
-        "statuses": all_statuses,
-        "counts": {
-            s: {cd: check_status_counts[cd].get(s, 0) for cd in check_dates}
-            for s in all_statuses
-        }
-    }
     complete_dist = {
         "dates": dates,
         "statuses": all_statuses,
@@ -580,7 +566,6 @@ def build_data(records, monthly):
         "counts": {v: dict(d) for v, d in counts.items()},
         "stats": stats,
         "entry_summary": entry_summary,
-        "check_dist": check_dist,
         "complete_dist": complete_dist,
         "entry_dist": dict(entry_counts),
         "consulate_dist": dict(consulate_counts),
@@ -595,10 +580,10 @@ def build_data(records, monthly):
     }
 
 
-def generate_html(data, updated):
+def generate_html(data, updated, date_label="Last 90 Days"):
     s = data.get("summary", {})
     summary_html = (
-        f'{s.get("total", 0):,} cases in last 90 days'
+        f'{s.get("total", 0):,} cases ({date_label})'
         f' &nbsp;·&nbsp; {s.get("clear_pct", 0)}% eventually cleared'
         f' &nbsp;·&nbsp; median wait {s.get("med_wait", 0)}d'
     )
@@ -679,7 +664,7 @@ def generate_html(data, updated):
 </style>
 </head>
 <body>
-<h1>Daily Completed Cases by Visa Category (Last 90 Days)</h1>
+<h1>Daily Completed Cases by Visa Category ({date_label})</h1>
 <p class="updated">Last updated: {updated} &nbsp;·&nbsp; Source: <a href="https://www.checkee.info" target="_blank">checkee.info</a></p>
 <p class="summary-stats">{summary_html}</p>
 <div class="filter-bar" id="filterBar">
@@ -701,7 +686,7 @@ def generate_html(data, updated):
 <div class="monthly-wrap" id="waitWrap"></div>
 <div class="outer-wrap" style="max-width:1500px;margin:0 auto 24px;padding:0 20px">
   <div class="card">
-    <h3>All Records (Last 90 Days)</h3>
+    <h3>All Records ({date_label})</h3>
     <div id="tableCount"></div>
     <div class="table-scroll"><table id="recordsTable"><thead></thead><tbody></tbody></table></div>
   </div>
@@ -714,7 +699,7 @@ const groups = [
   {{ label: 'Work',               visas: ['H1','H4'], colors: ['#E15759','#F0AAAB'] }},
   {{ label: 'Exchange Visitor',   visas: ['J1','J2'], colors: ['#F28E2B','#F8BF80'] }},
   {{ label: 'Intracompany',       visas: ['L1','L2'], colors: ['#76B7B2','#AADBD7'] }},
-  {{ label: 'Extraordinary Ability', visas: ['O1'],   colors: ['#B07AA1'] }},
+  {{ label: 'Extraordinary Ability', visas: ['O1', 'O2'], colors: ['#B07AA1', '#D4B5CC'] }},
 ];
 
 // Status colors (defined early so updateAllCharts can reference them)
@@ -843,22 +828,17 @@ function buildAgg(records) {{
   const dateSets = new Set();
   const countsMap = {{}};
   const rawDays = {{}};
-  const cscMap = {{}};
   const compMap = {{}};
   const entryDays = {{}};  // entry_type -> [days]
   const consulateCounts = {{}};
   const consulateDays = {{}};
 
-  for (const [date, visa, days, status, checkDate, consulate, entry] of records) {{
+  for (const [date, visa, days, status, , consulate, entry] of records) {{
     dateSets.add(date);
     countsMap[visa] = countsMap[visa] || {{}};
     countsMap[visa][date] = (countsMap[visa][date] || 0) + 1;
     rawDays[visa] = rawDays[visa] || [];
     rawDays[visa].push(days);
-    if (/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(checkDate)) {{
-      cscMap[checkDate] = cscMap[checkDate] || {{}};
-      cscMap[checkDate][status] = (cscMap[checkDate][status] || 0) + 1;
-    }}
     if (/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(date)) {{
       compMap[date] = compMap[date] || {{}};
       compMap[date][status] = (compMap[date][status] || 0) + 1;
@@ -910,14 +890,6 @@ function buildAgg(records) {{
   // Use the global status list so colors stay consistent even if a consulate
   // has zero records for some statuses.
   const allStatuses = DATA.complete_dist.statuses || [];
-  const checkDates  = Object.keys(cscMap).sort();
-  const check_dist  = {{
-    dates:    checkDates,
-    statuses: allStatuses,
-    counts:   Object.fromEntries(allStatuses.map(s => [
-      s, Object.fromEntries(checkDates.map(cd => [cd, (cscMap[cd] || {{}})[s] || 0]))
-    ])),
-  }};
   const complete_dist = {{
     dates:    dates,
     statuses: allStatuses,
@@ -929,7 +901,7 @@ function buildAgg(records) {{
   const consulate_median = Object.fromEntries(Object.entries(consulateDays).map(([k, dl]) => [k, jsMedian(dl)]));
 
   return {{
-    dates, counts: countsMap, stats, entry_summary, check_dist, complete_dist,
+    dates, counts: countsMap, stats, entry_summary, complete_dist,
     consulate_dist: consulateCounts,
     consulate_median: consulate_median,
   }};
@@ -995,7 +967,7 @@ function updateAllCharts(records) {{
     }}
     const cdStats = document.getElementById('cdStats');
     if (cdStats) cdStats.innerHTML =
-      '<span style="color:#aaa;font-size:10px">stacked bars = status by issue date &nbsp;·&nbsp; <b style="color:#1e293b">- - -</b> avg ' + dynAvg + ' cases/day</span>';
+      '<span style="color:#aaa;font-size:10px">stacked bars = status by complete date &nbsp;·&nbsp; <b style="color:#1e293b">- - -</b> avg ' + dynAvg + ' cases/day</span>';
     cdc.update();
   }}
   updateConsulateChart(agg.consulate_dist, agg.consulate_median);
@@ -1120,10 +1092,10 @@ grid.appendChild(waitCard);
   }});
 }})();
 
-// ── Card 7: issue date distribution (appended before waitCard) ────────────────
+// ── Card 7: complete date distribution (appended before waitCard) ─────────────
 const cdCard = document.createElement('div');
 cdCard.className = 'card';
-cdCard.innerHTML = '<h3>Issue Date Distribution</h3><div style="position:relative;height:200px"><canvas id="cCD"></canvas></div>' +
+cdCard.innerHTML = '<h3>Complete Date Distribution</h3><div style="position:relative;height:200px"><canvas id="cCD"></canvas></div>' +
   '<div class="stats" id="cdStats"></div>';
 grid.insertBefore(cdCard, waitCard);
 
@@ -1131,7 +1103,7 @@ const cd = DATA.complete_dist;
 const cdTotals = cd.dates.map(d => (cd.statuses || []).reduce((s, st) => s + ((cd.counts[st] || {{}})[d] || 0), 0));
 const cdAvg = cdTotals.length ? +(cdTotals.reduce((a, b) => a + b, 0) / cdTotals.length).toFixed(1) : 0;
 document.getElementById('cdStats').innerHTML =
-  '<span style="color:#aaa;font-size:10px">stacked bars = status by issue date &nbsp;·&nbsp; <b style="color:#1e293b">- - -</b> avg ' + cdAvg + ' cases/day</span>';
+  '<span style="color:#aaa;font-size:10px">stacked bars = status by complete date &nbsp;·&nbsp; <b style="color:#1e293b">- - -</b> avg ' + cdAvg + ' cases/day</span>';
 chartInstances['cCD'] = new Chart(document.getElementById('cCD'), {{
   type: 'bar',
   data: {{
@@ -1556,8 +1528,7 @@ if __name__ == "__main__":
         monthly = {"months": [], "pending": [], "clear": [], "reject": [], "total": []}
     data = build_data(records, monthly)
     print(f"Dates: {data['dates'][0] if data['dates'] else 'none'} → {data['dates'][-1] if data['dates'] else 'none'}")
-    print(f"Statuses found: {data['check_dist']['statuses']}")
-    print(f"Check dates: {len(data['check_dist']['dates'])} days")
+    print(f"Statuses found: {data['complete_dist']['statuses']}")
     updated = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M CST")
     html = generate_html(data, updated)
     with open("index.html", "w", encoding="utf-8") as f:

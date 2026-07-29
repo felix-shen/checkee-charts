@@ -666,7 +666,7 @@ def generate_html(data, updated, date_label="Last 90 Days"):
 <body>
 <h1>Daily Completed Cases by Visa Category ({date_label})</h1>
 <p class="updated">Last updated: {updated} &nbsp;·&nbsp; Source: <a href="https://www.checkee.info" target="_blank">checkee.info</a></p>
-<p class="summary-stats">{summary_html}</p>
+<p class="summary-stats" id="summaryStats">{summary_html}</p>
 <div class="filter-bar" id="filterBar">
   <div class="filter-control">
     <details class="filter-dropdown" id="visaDropdown">
@@ -693,6 +693,7 @@ def generate_html(data, updated, date_label="Last 90 Days"):
 </div>
 <script>
 const DATA = {data_json};
+const DATE_LABEL = '{date_label}';
 const groups = [
   {{ label: 'Business / Visitor', visas: ['B1','B2'], colors: ['#4E79A7','#9CBDDB'] }},
   {{ label: 'Student',            visas: ['F1','F2'], colors: ['#59A14F','#97CB8F'] }},
@@ -910,6 +911,20 @@ function buildAgg(records) {{
 // ── Refresh all charts from a (possibly filtered) record list ─────────────────
 function updateAllCharts(records) {{
   const agg = buildAgg(records);
+
+  // Update top summary stats based on filtered records
+  const total = records.length;
+  const clearCount = records.filter(r => r[3] === 'Clear').length;
+  const clearPct = total ? (100 * clearCount / total).toFixed(1) : 0;
+  const clearDays = records.filter(r => r[3] === 'Clear').map(r => r[2]);
+  const medWait = jsMedian(clearDays);
+  const summaryEl = document.getElementById('summaryStats');
+  if (summaryEl) {{
+    summaryEl.innerHTML =
+      total.toLocaleString() + ' cases (' + DATE_LABEL + ')' +
+      ' &nbsp;&middot;&nbsp; ' + clearPct + '% eventually cleared' +
+      ' &nbsp;&middot;&nbsp; median wait ' + medWait + 'd';
+  }}
 
   // Visa group charts (cards 0-5)
   groups.forEach((g, i) => {{

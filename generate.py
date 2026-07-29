@@ -275,24 +275,34 @@ def load_cached_records(html_path="index.html"):
     return records
 
 
-def build_chrome_options(force_refresh=False):
-    """Create Chrome options backed by a copied local profile."""
+def build_chrome_options(force_refresh=False, ci=False):
+    """Create Chrome options. In CI mode: headless, no profile. Local: copied macOS profile."""
     from selenium.webdriver.chrome.options import Options
 
-    # Copy Chrome profile so we get existing CF cookies without touching the live profile.
-    # Skip if a recent copy already exists (avoids re-copying on every run).
+    if ci:
+        opts = Options()
+        opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_argument("--window-size=1920,1080")
+        opts.add_argument("--disable-gpu")
+        print("CI mode: headless Chrome, no profile")
+        return opts
+
+    # Local mode: copy Chrome profile for CF cookies
     src = os.path.expanduser("~/Library/Application Support/Google/Chrome/Default")
     dst = CHROME_PROFILE_COPY
     profile_age = float('inf')
     if os.path.exists(dst):
         profile_age = time.time() - os.path.getmtime(dst)
 
-    if force_refresh or profile_age > 3600:  # Re-copy if stale or a retry needs a clean profile.
+    if force_refresh or profile_age > 3600:
         if os.path.exists(dst):
             try:
                 shutil.rmtree(dst)
             except Exception:
-                pass  # Use existing copy if rmtree fails
+                pass
         if not os.path.exists(dst):
             shutil.copytree(src, dst,
                 ignore=shutil.ignore_patterns(
@@ -311,19 +321,23 @@ def build_chrome_options(force_refresh=False):
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
-    # Non-headless so Cloudflare doesn't detect automation
-    # (window appears briefly then closes)
     return opts
 
 
-def scrape_with_selenium(force_refresh_profile=False):
-    """Use a non-headless Chrome session (with copied profile) to submit the 90-day form on checkee.info.
-    Bypasses Cloudflare because a real Chrome profile with valid cookies is used."""
-    from selenium import webdriver
+def scrape_with_selenium(force_refresh_profile=False, ci=False):
+    """Submit the 90-day form on checkee.info and parse results.
+    Local: non-headless Chrome with copied profile (CF cookies).
+    CI: undetected_chromedriver in headless mode."""
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import Select as SeleniumSelect
 
-    driver = webdriver.Chrome(options=build_chrome_options(force_refresh=force_refresh_profile))
+    if ci:
+        import undetected_chromedriver as uc
+        opts = build_chrome_options(ci=True)
+        driver = uc.Chrome(options=opts, headless=True, use_subprocess=False)
+    else:
+        from selenium import webdriver
+        driver = webdriver.Chrome(options=build_chrome_options(force_refresh=force_refresh_profile))
     try:
         driver.get("https://www.checkee.info/main.php?sortby=clear_date")
 
@@ -361,13 +375,12 @@ def scrape_with_selenium(force_refresh_profile=False):
         driver.quit()
 
 
-def scrape():
+def scrape(ci=False):
     """Fetch the full 90-day dataset from checkee.info.
-    Uses Selenium with a copied Chrome profile to bypass Cloudflare JS challenge.
     Falls back to incremental merge with cached index.html if Selenium fails."""
     for attempt in range(1, 4):
         try:
-            records = scrape_with_selenium(force_refresh_profile=attempt > 1)
+            records = scrape_with_selenium(force_refresh_profile=attempt > 1, ci=ci)
             print(f"Selenium scrape attempt {attempt}: {len(records)} records")
             if records:
                 return records
@@ -452,11 +465,15 @@ def parse_monthly_rows(soup):
     return rows
 
 
-def scrape_monthly_with_selenium():
-    """Scrape homepage monthly case table using local Chrome cookies."""
-    from selenium import webdriver
-
-    driver = webdriver.Chrome(options=build_chrome_options())
+def scrape_monthly_with_selenium(ci=False):
+    """Scrape homepage monthly case table using Selenium."""
+    if ci:
+        import undetected_chromedriver as uc
+        opts = build_chrome_options(ci=True)
+        driver = uc.Chrome(options=opts, headless=True, use_subprocess=False)
+    else:
+        from selenium import webdriver
+        driver = webdriver.Chrome(options=build_chrome_options())
     try:
         driver.get("https://www.checkee.info/")
         for _ in range(3):
@@ -472,7 +489,7 @@ def scrape_monthly_with_selenium():
     return monthly_dict_from_rows([])
 
 
-def scrape_monthly():
+def scrape_monthly(ci=False):
     """Scrape homepage monthly case table; return trailing 120 months."""
     try:
         r = fetch_with_retry("https://www.checkee.info/")
@@ -483,7 +500,7 @@ def scrape_monthly():
         print("WARNING: monthly requests scrape returned 0 rows; trying Selenium")
     except Exception as e:
         print(f"WARNING: monthly requests scrape failed ({e}); trying Selenium")
-    return scrape_monthly_with_selenium()
+    return scrape_monthly_with_selenium(ci=ci)
 
 
 def build_data(records, monthly):
@@ -1523,9 +1540,10 @@ updateAllCharts(DATA.raw_records);
 
 if __name__ == "__main__":
     import sys
-    print("Scraping checkee.info...")
+    ci = "--ci" in sys.argv or os.environ.get("CI") == "true"
+    print(f"Scraping checkee.info... (ci={ci})")
     try:
-        records = scrape()
+        records = scrape(ci=ci)
     except Exception as e:
         print(f"ERROR: scrape failed after all retries: {e}")
         print("Keeping existing index.html unchanged.")
@@ -1536,7 +1554,7 @@ if __name__ == "__main__":
         sys.exit(0)
     print("Scraping monthly case table...")
     try:
-        monthly = scrape_monthly()
+        monthly = scrape_monthly(ci=ci)
         print(f"Monthly rows: {len(monthly['months'])}")
     except Exception as e:
         print(f"WARNING: monthly scrape failed: {e}. Using empty data.")

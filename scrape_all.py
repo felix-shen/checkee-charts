@@ -57,10 +57,27 @@ def scrape_month(driver, month_str, By, SeleniumSelect):
     return records
 
 
+def _make_driver(ci=False):
+    """Create a Chrome driver — undetected_chromedriver in CI, regular Selenium locally."""
+    from selenium.webdriver.common.by import By
+    if ci:
+        import undetected_chromedriver as uc
+        opts = build_chrome_options(ci=True)
+        return uc.Chrome(options=opts, headless=True, use_subprocess=False)
+    else:
+        from selenium import webdriver
+        opts = build_chrome_options(force_refresh=True)
+        return webdriver.Chrome(options=opts)
+
+
 def main():
-    from selenium import webdriver
+    import os
+    import sys
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import Select as SeleniumSelect
+
+    ci = "--ci" in sys.argv or os.environ.get("CI") == "true"
+    print(f"scrape_all starting (ci={ci})")
 
     # Determine month range: 2026-01 to current month
     now = datetime.now(timezone.utc)
@@ -81,8 +98,7 @@ def main():
     all_records = []
     seen_keys = set()
 
-    opts = build_chrome_options(force_refresh=True)
-    driver = webdriver.Chrome(options=opts)
+    driver = _make_driver(ci=ci)
     try:
         for i, month_str in enumerate(months):
             print(f"\n[{i+1}/{len(months)}] Scraping {month_str}...")
@@ -106,8 +122,7 @@ def main():
 
     # Also try to get 90-day data to capture any records not in monthly views
     print("\n--- Scraping 90-day view for completeness ---")
-    opts2 = build_chrome_options()
-    driver2 = webdriver.Chrome(options=opts2)
+    driver2 = _make_driver(ci=ci)
     try:
         driver2.get("https://www.checkee.info/main.php?sortby=clear_date")
         selects = wait_for_dispdate_selects(driver2, By)
@@ -149,7 +164,7 @@ def main():
 
     # Get monthly summary data
     print("\nScraping monthly summary...")
-    monthly = scrape_monthly()
+    monthly = scrape_monthly(ci=ci)
 
     # Build data and generate HTML
     data = build_data(all_records, monthly)

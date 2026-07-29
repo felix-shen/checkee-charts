@@ -59,15 +59,8 @@ def scrape_month(driver, month_str, By, SeleniumSelect):
 
 def _make_driver(ci=False):
     """Create a Chrome driver — undetected_chromedriver in CI, regular Selenium locally."""
-    from selenium.webdriver.common.by import By
-    if ci:
-        import undetected_chromedriver as uc
-        opts = build_chrome_options(ci=True)
-        return uc.Chrome(options=opts, headless=True, use_subprocess=False)
-    else:
-        from selenium import webdriver
-        opts = build_chrome_options(force_refresh=True)
-        return webdriver.Chrome(options=opts)
+    from generate import _make_uc_driver
+    return _make_uc_driver(ci=ci, force_refresh_profile=True)
 
 
 def main():

@@ -324,6 +324,37 @@ def build_chrome_options(force_refresh=False, ci=False):
     return opts
 
 
+def _get_chrome_major_version():
+    """Detect installed Chrome major version (Linux/macOS)."""
+    import subprocess
+    for cmd in ["google-chrome", "google-chrome-stable", "chromium-browser",
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]:
+        try:
+            out = subprocess.check_output([cmd, "--version"], stderr=subprocess.DEVNULL).decode()
+            m = re.search(r"(\d+)\.", out)
+            if m:
+                return int(m.group(1))
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+    return None
+
+
+def _make_uc_driver(ci=False, force_refresh_profile=False):
+    """Create a Chrome driver — undetected_chromedriver in CI, regular Selenium locally."""
+    if ci:
+        import undetected_chromedriver as uc
+        opts = build_chrome_options(ci=True)
+        ver = _get_chrome_major_version()
+        print(f"Chrome major version: {ver}")
+        kwargs = dict(options=opts, headless=True, use_subprocess=False)
+        if ver:
+            kwargs["version_main"] = ver
+        return uc.Chrome(**kwargs)
+    else:
+        from selenium import webdriver
+        return webdriver.Chrome(options=build_chrome_options(force_refresh=force_refresh_profile))
+
+
 def scrape_with_selenium(force_refresh_profile=False, ci=False):
     """Submit the 90-day form on checkee.info and parse results.
     Local: non-headless Chrome with copied profile (CF cookies).
@@ -331,13 +362,7 @@ def scrape_with_selenium(force_refresh_profile=False, ci=False):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import Select as SeleniumSelect
 
-    if ci:
-        import undetected_chromedriver as uc
-        opts = build_chrome_options(ci=True)
-        driver = uc.Chrome(options=opts, headless=True, use_subprocess=False)
-    else:
-        from selenium import webdriver
-        driver = webdriver.Chrome(options=build_chrome_options(force_refresh=force_refresh_profile))
+    driver = _make_uc_driver(ci=ci, force_refresh_profile=force_refresh_profile)
     try:
         driver.get("https://www.checkee.info/main.php?sortby=clear_date")
 
@@ -467,13 +492,7 @@ def parse_monthly_rows(soup):
 
 def scrape_monthly_with_selenium(ci=False):
     """Scrape homepage monthly case table using Selenium."""
-    if ci:
-        import undetected_chromedriver as uc
-        opts = build_chrome_options(ci=True)
-        driver = uc.Chrome(options=opts, headless=True, use_subprocess=False)
-    else:
-        from selenium import webdriver
-        driver = webdriver.Chrome(options=build_chrome_options())
+    driver = _make_uc_driver(ci=ci)
     try:
         driver.get("https://www.checkee.info/")
         for _ in range(3):

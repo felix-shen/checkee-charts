@@ -340,24 +340,31 @@ def _get_chrome_major_version():
 
 
 def _make_uc_driver(ci=False, force_refresh_profile=False):
-    """Create a Chrome driver — undetected_chromedriver in CI, regular Selenium locally.
-    CI: runs NON-headless under xvfb so undetected_chromedriver patches work properly
-    and Cloudflare JS challenges can be solved."""
+    """Create a Chrome driver.
+    CI: regular Selenium + webdriver-manager (auto-matching ChromeDriver) + anti-detection.
+    Local: Selenium with copied macOS Chrome profile."""
     if ci:
-        import undetected_chromedriver as uc
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.chrome.options import Options
+        from webdriver_manager.chrome import ChromeDriverManager
+
         opts = Options()
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
         opts.add_argument("--window-size=1920,1080")
-        # NO --headless flag: xvfb provides virtual display, and uc patches
-        # only work properly in non-headless mode (solves CF JS challenges)
-        ver = _get_chrome_major_version()
-        print(f"Chrome major version: {ver}")
-        kwargs = dict(options=opts, use_subprocess=False)
-        if ver:
-            kwargs["version_main"] = ver
-        return uc.Chrome(**kwargs)
+        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+        opts.add_experimental_option("useAutomationExtension", False)
+
+        svc = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=svc, options=opts)
+
+        # Remove webdriver flag via CDP
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
+        return driver
     else:
         from selenium import webdriver
         return webdriver.Chrome(options=build_chrome_options(force_refresh=force_refresh_profile))

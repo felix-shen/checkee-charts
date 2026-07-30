@@ -3,3 +3,4 @@ beautifulsoup4>=4.12
 selenium>=4.0
 undetected-chromedriver>=3.5
 curl_cffi>=0.7
+webdriver-manager>=4.0

@@ -11,7 +11,7 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -19,11 +19,16 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Chrome and xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable xvfb
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
       - name: Scrape checkee.info and generate charts
-        run: python generate.py --ci
+        run: xvfb-run -a python generate.py --ci
 
       - name: Commit and push
         run: |

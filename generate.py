@@ -340,13 +340,21 @@ def _get_chrome_major_version():
 
 
 def _make_uc_driver(ci=False, force_refresh_profile=False):
-    """Create a Chrome driver — undetected_chromedriver in CI, regular Selenium locally."""
+    """Create a Chrome driver — undetected_chromedriver in CI, regular Selenium locally.
+    CI: runs NON-headless under xvfb so undetected_chromedriver patches work properly
+    and Cloudflare JS challenges can be solved."""
     if ci:
         import undetected_chromedriver as uc
-        opts = build_chrome_options(ci=True)
+        from selenium.webdriver.chrome.options import Options
+        opts = Options()
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--window-size=1920,1080")
+        # NO --headless flag: xvfb provides virtual display, and uc patches
+        # only work properly in non-headless mode (solves CF JS challenges)
         ver = _get_chrome_major_version()
         print(f"Chrome major version: {ver}")
-        kwargs = dict(options=opts, headless=True, use_subprocess=False)
+        kwargs = dict(options=opts, use_subprocess=False)
         if ver:
             kwargs["version_main"] = ver
         return uc.Chrome(**kwargs)
@@ -452,10 +460,22 @@ def _incremental_merge(fresh_records):
 
 def scrape(ci=False):
     """Fetch dataset from checkee.info.
-    CI: curl_cffi (7-day) + incremental merge with cached data.
+    CI: Selenium (uc + xvfb solves CF JS challenge) → curl_cffi fallback → incremental merge.
     Local: Selenium with Chrome profile, falls back to incremental on failure."""
     if ci:
-        # CI mode: use curl_cffi (no Chrome/Selenium needed)
+        # CI: try Selenium first (uc + xvfb can solve CF JS challenges for full 90-day data)
+        for attempt in range(1, 3):
+            try:
+                records = scrape_with_selenium(ci=True)
+                print(f"CI Selenium scrape attempt {attempt}: {len(records)} records")
+                if records:
+                    return records
+            except Exception as e:
+                print(f"CI Selenium attempt {attempt} failed ({e})")
+            time.sleep(10)
+
+        # Fallback: curl_cffi (7-day only) + incremental merge
+        print("CI Selenium failed, falling back to curl_cffi + incremental merge")
         for attempt in range(1, 4):
             try:
                 records = scrape_with_curl_cffi()
@@ -465,7 +485,7 @@ def scrape(ci=False):
                 print(f"curl_cffi attempt {attempt} failed ({e})")
             if attempt < 3:
                 time.sleep(10)
-        raise RuntimeError("curl_cffi failed after 3 attempts")
+        raise RuntimeError("All CI scraping methods failed")
 
     # Local mode: try Selenium first
     for attempt in range(1, 4):

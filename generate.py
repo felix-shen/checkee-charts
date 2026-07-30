@@ -400,12 +400,77 @@ def scrape_with_selenium(force_refresh_profile=False, ci=False):
         driver.quit()
 
 
+def scrape_with_curl_cffi():
+    """Fetch last 7 days from checkee.info using curl_cffi (TLS fingerprint impersonation).
+    Works in CI where Cloudflare blocks regular requests and Selenium."""
+    from curl_cffi import requests as cffi_requests
+    session = cffi_requests.Session()
+    session.get("https://www.checkee.info/", impersonate="chrome", timeout=20)
+    time.sleep(2)
+    r = session.get("https://www.checkee.info/main.php?sortby=clear_date",
+                    impersonate="chrome", timeout=20)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    records = parse_rows(soup)
+    print(f"curl_cffi: {len(records)} records from 7-day view")
+    return records
+
+
+def _incremental_merge(fresh_records):
+    """Merge fresh records with cached index.html data, deduplicate, and return."""
+    cached_records = load_cached_records()
+    print(f"Cached records from index.html: {len(cached_records)}")
+
+    if not fresh_records:
+        raise RuntimeError("No fresh rows; keeping existing index.html.")
+
+    def rec_key(r):
+        return (r["date"], r["visa"], r["days"], r["check_date"])
+
+    seen = set()
+    merged = []
+    for r in fresh_records + cached_records:
+        k = rec_key(r)
+        if k not in seen:
+            seen.add(k)
+            merged.append(r)
+
+    # Keep all records since 2026-01-01
+    cutoff = "2026-01-01"
+    merged = [r for r in merged if r["date"] >= cutoff]
+    print(f"Merged records (since {cutoff}): {len(merged)}")
+
+    if cached_records and len(merged) < len(cached_records) * 0.90:
+        raise RuntimeError(
+            f"Fallback would shrink from {len(cached_records)} to {len(merged)}; keeping existing index.html."
+        )
+
+    if not merged:
+        raise RuntimeError("No records after merge.")
+    return merged
+
+
 def scrape(ci=False):
-    """Fetch the full 90-day dataset from checkee.info.
-    Falls back to incremental merge with cached index.html if Selenium fails."""
+    """Fetch dataset from checkee.info.
+    CI: curl_cffi (7-day) + incremental merge with cached data.
+    Local: Selenium with Chrome profile, falls back to incremental on failure."""
+    if ci:
+        # CI mode: use curl_cffi (no Chrome/Selenium needed)
+        for attempt in range(1, 4):
+            try:
+                records = scrape_with_curl_cffi()
+                if records:
+                    return _incremental_merge(records)
+            except Exception as e:
+                print(f"curl_cffi attempt {attempt} failed ({e})")
+            if attempt < 3:
+                time.sleep(10)
+        raise RuntimeError("curl_cffi failed after 3 attempts")
+
+    # Local mode: try Selenium first
     for attempt in range(1, 4):
         try:
-            records = scrape_with_selenium(force_refresh_profile=attempt > 1, ci=ci)
+            records = scrape_with_selenium(force_refresh_profile=attempt > 1, ci=False)
             print(f"Selenium scrape attempt {attempt}: {len(records)} records")
             if records:
                 return records
@@ -424,34 +489,7 @@ def scrape(ci=False):
     fresh_records = parse_rows(base_soup)
     print(f"Fallback — fresh rows from base page: {len(fresh_records)}")
 
-    cached_records = load_cached_records()
-    print(f"Cached records from index.html: {len(cached_records)}")
-
-    if not fresh_records:
-        raise RuntimeError("Fallback returned 0 fresh rows; keeping existing index.html.")
-
-    def rec_key(r):
-        return (r["date"], r["visa"], r["days"], r["check_date"])
-
-    seen = set()
-    merged = []
-    for r in fresh_records + cached_records:
-        k = rec_key(r)
-        if k not in seen:
-            seen.add(k)
-            merged.append(r)
-
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
-    merged = [r for r in merged if r["date"] >= cutoff]
-    print(f"Merged records after 90-day prune: {len(merged)}")
-
-    if cached_records and len(merged) < len(cached_records) * 0.95:
-        raise RuntimeError(
-            f"Fallback would shrink cached records from {len(cached_records)} to {len(merged)}; keeping existing index.html."
-        )
-
-    if not merged:
-        raise RuntimeError("No records after merge — nothing to render.")
+    return _incremental_merge(fresh_records)
     return merged
 
 
